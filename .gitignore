@@ -1,0 +1,37 @@
+# Data and Logs
+data/
+logs/
+*.log
+*.sqlite
+*.db
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+venv/
+.venv/
+env/
+.env
+
+# Node.js
+frontend/node_modules/
+frontend/dist/
+frontend/.output/
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-compose.override.yml
+
+# Project specific
+Docker Web Pusher 项目最终结构图.txt
+构建镜像的命令.txt

@@ -1,0 +1,22 @@
+version: '3.8'
+
+services:
+  # 我们现在只有一个服务，可以叫它 app 或 web
+  app:
+    # 构建上下文是当前目录(.)，Dockerfile也是根目录下的那个
+    build: .
+    
+    container_name: docker-pusher-app
+
+    # 将主机的8000端口映射到容器的8000端口
+    # 现在，我们通过 http://localhost:8000 直接访问整个应用
+    ports:
+      - "7225:8000"
+
+    volumes:
+      - ./data:/app/data
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /vol1/1000/NVME:/vol1/1000/NVME
+    restart: unless-stopped
+    environment:
+      - TZ=Asia/Shanghai  # 时区    

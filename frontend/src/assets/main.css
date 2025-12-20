@@ -1,0 +1,33 @@
+@import './base.css';
+
+/* ✨ 定义整个应用(#app)的宏观布局 */
+#app {
+  /* 使用Flexbox布局 */
+  display: flex;
+  flex-direction: column; /* 垂直排列子元素 */
+  min-height: 100vh;      /* 确保应用至少占满整个视口高度 */
+}
+
+/* ✨ 定义页头样式 */
+.main-header {
+  border-bottom: 1px solid var(--vt-c-divider-light-1);
+  padding: 0 2rem; /* 给页头一些左右内边距 */
+  flex-shrink: 0;  /* 防止页头在内容过多时被压缩 */
+  height: 60px;
+  display: flex;
+  align-items: center;
+}
+
+/* ✨ 定义主内容区的容器样式 */
+.main-content {
+  flex-grow: 1; /* 让内容区占据所有剩余的垂直空间 */
+  padding: 2rem;  /* 给内容区一些内边距 */
+  width: 100%;
+}
+
+/* ✨ 定义内容包裹层，这是实现居中的关键 */
+.content-wrapper {
+  max-width: 1400px; /* 设置内容的最大宽度 */
+  margin: 0 auto;    /* 实现水平居中 */
+  width: 100%;
+}

@@ -1,0 +1,14 @@
+
+services:
+  docker-pusher:
+    image: pipi20xx/dockerhub-web-box
+    container_name: dockerhub-web-box
+    ports:
+      - "7222:8000"
+    volumes:
+      - ./data:/app/data    #数据存储位
+      - /var/run/docker.sock:/var/run/docker.sock #映射docker核心
+      - /vol1/1000/NVME:/vol1/1000/NVME #挂载你需要构建的那些文件路径
+    environment:
+      - TZ=Asia/Shanghai
+    restart: unless-stopped

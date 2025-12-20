@@ -1,0 +1,23 @@
+# 忽略数据和日志
+data/
+backend/app/data/
+logs/
+
+# 忽略 Node.js 依赖和构建产物
+frontend/node_modules/
+frontend/dist/
+
+# 忽略 Python 缓存
+**/__pycache__/
+**/*.py[cod]
+
+# 忽略 Git 和 IDE 配置
+.git/
+.vscode/
+.idea/
+.gitignore
+
+# 忽略说明文件
+README.md
+1.png
+*.txt
