@@ -41,15 +41,67 @@ def run_docker_task(task_id: str, project_data: dict, tag: str, cred_data: dict 
 
         # 2. 构建
         build_args = {}
+        effective_dockerfile = p['dockerfile_path']
+        
         if proxy_data:
-            log(f"---  检测到代理配置: '{proxy_data['name']}' ({proxy_data['url']}) ---")
-            build_args['HTTP_PROXY'] = proxy_data['url']
-            build_args['HTTPS_PROXY'] = proxy_data['url']
+            url = proxy_data['url']
+            log(f"--- 🚀 正在注入通用代理配置: {url} ---")
+            # 同时提供大写和小写，确保全工具兼容
+            for key in ['HTTP_PROXY', 'HTTPS_PROXY', 'http_proxy', 'https_proxy']:
+                build_args[key] = url
+            build_args['NO_PROXY'] = 'localhost,127.0.0.1'
+            build_args['no_proxy'] = 'localhost,127.0.0.1'
+
+            # --- 黑科技：动态注入代理声明到 Dockerfile ---
+            try:
+                import os
+                original_df_path = os.path.join(p['build_context'], p['dockerfile_path'])
+                with open(original_df_path, 'r', encoding='utf-8') as f:
+                    content = f.read()
+                
+                # 在每一个 FROM 指令后面插入代理声明
+                # 这样可以处理多阶段构建（Multi-stage builds）
+                proxy_setup = (
+                    "\n# --- Proxy Injection by System ---\n"
+                    "ARG HTTP_PROXY\nARG HTTPS_PROXY\nARG http_proxy\nARG https_proxy\n"
+                    "ENV HTTP_PROXY=$HTTP_PROXY\nENV HTTPS_PROXY=$HTTPS_PROXY\n"
+                    "ENV http_proxy=$http_proxy\nENV https_proxy=$https_proxy\n"
+                    "RUN if [ -f /etc/apt/apt.conf.d/99proxy ]; then :; elif [ -d /etc/apt/apt.conf.d ]; then "
+                    "echo \"Acquire::http::Proxy \\\"$HTTP_PROXY\\\";\" > /etc/apt/apt.conf.d/99proxy; fi\n"
+                    "# --- End Proxy Injection ---\n"
+                )
+                
+                new_content = ""
+                for line in content.splitlines():
+                    new_content += line + "\n"
+                    if line.strip().upper().startswith("FROM "):
+                        new_content += proxy_setup
+                
+                effective_dockerfile = p['dockerfile_path'] + ".proxy_tmp"
+                temp_df_path = os.path.join(p['build_context'], effective_dockerfile)
+                with open(temp_df_path, 'w', encoding='utf-8') as f:
+                    f.write(new_content)
+                log(f"--- 已生成临时代理 Dockerfile: {effective_dockerfile} ---")
+            except Exception as e:
+                log(f"--- ⚠️ 代理注入失败 (将尝试常规构建): {e} ---")
 
         log(f"\n--- [{step}/{total_steps}] 开始构建镜像: {p['local_image_name']}:{tag} ---")
-        streamer = client.api.build(path=p['build_context'], dockerfile=p['dockerfile_path'], tag=f"{p['local_image_name']}:{tag}", nocache=p['no_cache'], rm=True, decode=True, buildargs=build_args)
-        for chunk in streamer:
-            if 'stream' in chunk: log(chunk['stream'])
+        try:
+            streamer = client.api.build(
+                path=p['build_context'], 
+                dockerfile=effective_dockerfile, 
+                tag=f"{p['local_image_name']}:{tag}", 
+                nocache=p['no_cache'], 
+                rm=True, 
+                decode=True, 
+                buildargs=build_args
+            )
+            for chunk in streamer:
+                if 'stream' in chunk: log(chunk['stream'])
+        finally:
+            # 清理临时文件
+            if proxy_data and 'temp_df_path' in locals() and os.path.exists(temp_df_path):
+                os.remove(temp_df_path)
         
         image = client.images.get(f"{p['local_image_name']}:{tag}")
         log(f"\n--- 构建成功, 镜像 ID: {image.short_id} ---")
