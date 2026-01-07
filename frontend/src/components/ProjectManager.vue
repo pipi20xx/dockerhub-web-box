@@ -1,5 +1,29 @@
 <template>
   <div class="project-manager">
+    <el-alert
+        v-if="!systemStatus.is_ready"
+        title="多架构构建环境未就绪"
+        type="warning"
+        description="检测到当前环境未配置多架构 Builder 或未安装模拟器，无法构建 ARM 镜像。"
+        show-icon
+        style="margin-bottom: 15px;"
+    >
+        <template #default>
+            <div style="margin-top: 10px">
+                <el-button type="warning" size="small" @click="handleInitEnv">一键修复环境</el-button>
+            </div>
+        </template>
+    </el-alert>
+
+    <div v-else class="system-ready-bar">
+        <el-tag type="success" effect="dark" round>
+            <i class="el-icon-check"></i> 多架构构建环境已就绪
+        </el-tag>
+        <span class="platform-list">
+            支持平台: {{ systemStatus.supported_platforms.join(', ') }}
+        </span>
+    </div>
+
     <div class="header-controls">
       <h2>项目管理</h2>
       <div> <!-- ✨ 新增div用于包裹按钮 -->
@@ -95,6 +119,17 @@
           <el-switch v-model="currentProject.auto_cleanup" />
           <span style="margin-left: 10px; font-size: 12px; color: #909399;">成功推送后自动删除本地镜像标签</span>
         </el-form-item>
+        <el-form-item label="目标平台" prop="platforms_array">
+            <el-checkbox-group v-model="currentProject.platforms_array">
+                <el-checkbox label="linux/amd64">AMD64 (x86)</el-checkbox>
+                <el-checkbox label="linux/arm64">ARM64 (Apple/Huawei)</el-checkbox>
+                <el-checkbox label="linux/386">386</el-checkbox>
+                <el-checkbox label="linux/arm/v7">ARMv7</el-checkbox>
+            </el-checkbox-group>
+            <div style="font-size: 12px; color: #909399; line-height: 1.4;">
+                勾选多个平台将启用 <b>Buildx</b> 模式。构建 ARM 镜像需要先点击上方的“一键修复环境”。
+            </div>
+        </el-form-item>
       </el-form>
       <template #footer>
         <span class="dialog-footer">
@@ -119,11 +154,25 @@
         title="正在创建备份"
         @close="backupProgress.close()"
     />
+
+    <!-- 环境初始化进度 Dialog -->
+    <el-dialog v-model="initDialogVisible" title="系统环境初始化" width="60%" :close-on-click-modal="false">
+        <div class="init-log-container">
+            <pre ref="initLogRef">{{ initLogs }}</pre>
+        </div>
+        <template #footer>
+            <span class="dialog-footer">
+                <el-button type="primary" :disabled="initing" @click="initDialogVisible = false">
+                    {{ initing ? '正在初始化...' : '关闭' }}
+                </el-button>
+            </span>
+        </template>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, reactive, onMounted } from 'vue';
+import { ref, reactive, onMounted, nextTick } from 'vue';
 import { useProjectStore } from '@/stores/projectStore';
 import { useCredentialStore } from '@/stores/credentialStore';
 import { useProxyStore } from '@/stores/proxyStore';
@@ -155,6 +204,65 @@ const currentBackupProject = ref(null);
 // Backup Progress
 const backupProgress = useSimulatedProgress();
 
+// System Multi-arch Status
+const systemStatus = ref({
+    is_ready: true,
+    supported_platforms: [],
+    buildx_available: true
+});
+const initDialogVisible = ref(false);
+const initLogs = ref('');
+const initing = ref(false);
+const initLogRef = ref(null);
+
+const checkSystemStatus = async () => {
+    try {
+        const res = await apiClient.get('/system/status');
+        systemStatus.value = res.data;
+    } catch (e) {
+        console.error('Failed to check system status:', e);
+    }
+};
+
+const handleInitEnv = async () => {
+    initLogs.value = '';
+    initDialogVisible.value = true;
+    initing.value = true;
+    
+    try {
+        const response = await fetch('/api/v1/system/initialize', {
+            method: 'POST',
+        });
+        
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            
+            const text = decoder.decode(value, { stream: true });
+            initLogs.value += text;
+            
+            // 自动滚动到底部
+            nextTick(() => {
+                if (initLogRef.value) {
+                    const container = initLogRef.value.parentElement;
+                    container.scrollTop = container.scrollHeight;
+                }
+            });
+        }
+        
+        ElMessage.success('环境初始化流程已完成');
+        await checkSystemStatus();
+    } catch (error) {
+        initLogs.value += `\n❌ 发生错误: ${error.message}`;
+        ElMessage.error(`初始化过程中发生错误`);
+    } finally {
+        initing.value = false;
+    }
+};
+
 const projectFormRef = ref(null);
 const fileInputRef = ref(null); // Ref for file input
 const initialProjectState = {
@@ -166,6 +274,8 @@ const initialProjectState = {
   repo_image_name: '',
   no_cache: false,
   auto_cleanup: true,
+  platforms: 'linux/amd64',
+  platforms_array: ['linux/amd64'],
   credential_id: null,
   proxy_id: null,
 };
@@ -186,6 +296,7 @@ onMounted(() => {
   projectStore.fetchProjects();
   credentialStore.fetchCredentials();
   proxyStore.fetchProxies();
+  checkSystemStatus();
 });
 
 const resetForm = () => {
@@ -203,7 +314,8 @@ const openAddDialog = () => {
 
 const openEditDialog = (project) => {
   isEditing.value = true;
-  currentProject.value = { ...project };
+  const platforms_array = project.platforms ? project.platforms.split(',') : ['linux/amd64'];
+  currentProject.value = { ...project, platforms_array };
   dialogVisible.value = true;
 };
 
@@ -213,7 +325,9 @@ const handleSave = async () => {
     if (valid) {
       try {
         const dataToSend = { ...currentProject.value };
+        dataToSend.platforms = dataToSend.platforms_array.join(',');
         delete dataToSend.tag;
+        delete dataToSend.platforms_array;
 
         if (isEditing.value) {
           await apiClient.put(`/projects/${dataToSend.id}`, dataToSend);
@@ -434,9 +548,42 @@ const handleImport = async (event) => {
   justify-content: space-between;
   align-items: center;
 }
+.system-ready-bar {
+    margin-bottom: 20px;
+    padding: 10px 15px;
+    background-color: var(--el-fill-color-light);
+    border-radius: 8px;
+    display: flex;
+    align-items: center;
+    gap: 15px;
+    border: 1px solid var(--el-color-success-light-5);
+}
+.platform-list {
+    font-size: 12px;
+    color: var(--el-text-color-secondary);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .actions-cell {
   display: flex;
   align-items: center;
   gap: 8px;
+}
+.init-log-container {
+    background-color: #1e1e1e;
+    color: #d4d4d4;
+    padding: 15px;
+    border-radius: 4px;
+    height: 300px;
+    overflow-y: auto;
+    font-family: 'Courier New', Courier, monospace;
+    font-size: 13px;
+    line-height: 1.5;
+}
+.init-log-container pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-wrap: break-word;
 }
 </style>

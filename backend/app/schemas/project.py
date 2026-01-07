@@ -10,6 +10,7 @@ class ProjectBase(BaseModel):
     repo_image_name: str
     no_cache: bool = False
     auto_cleanup: bool = True
+    platforms: str = "linux/amd64"
     credential_id: str | None = None
     proxy_id: str | None = None
     backup_ignore_patterns: str | None = ""

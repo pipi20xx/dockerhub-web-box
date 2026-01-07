@@ -32,8 +32,18 @@ COPY backend/requirements.txt .
 RUN pip install --no-cache-dir --upgrade pip && \
     pip install --no-cache-dir -r requirements.txt
 
-# 安装 7z 工具以支持更高效的压缩
-RUN apt-get update && apt-get install -y p7zip-full && rm -rf /var/lib/apt/lists/*
+# 安装 7z 工具以支持更高效的压缩，以及安装 Docker CLI
+RUN apt-get update && apt-get install -y \
+    p7zip-full \
+    ca-certificates \
+    curl \
+    gnupg \
+    lsb-release && \
+    mkdir -p /etc/apt/keyrings && \
+    curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg && \
+    echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian $(lsb_release -cs) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null && \
+    apt-get update && apt-get install -y docker-ce-cli && \
+    rm -rf /var/lib/apt/lists/*
 
 # 复制后端应用代码
 # 注意：我们只复制backend目录，保持镜像干净

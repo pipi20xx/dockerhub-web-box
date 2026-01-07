@@ -37,3 +37,9 @@ def check_and_migrate_db():
                 # Using DEFAULT 1 (True) as we want it enabled by default.
                 conn.execute(text("ALTER TABLE projects ADD COLUMN auto_cleanup BOOLEAN DEFAULT 1 NOT NULL"))
                 conn.commit()
+
+        if "platforms" not in columns:
+            print("Migrating database: Adding 'platforms' column to 'projects' table.")
+            with engine.connect() as conn:
+                conn.execute(text("ALTER TABLE projects ADD COLUMN platforms VARCHAR DEFAULT 'linux/amd64' NOT NULL"))
+                conn.commit()

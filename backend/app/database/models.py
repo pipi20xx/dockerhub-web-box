@@ -13,6 +13,7 @@ class Project(Base):
     repo_image_name = Column(String, nullable=False)
     no_cache = Column(Boolean, default=False, nullable=False)
     auto_cleanup = Column(Boolean, default=True, nullable=False)
+    platforms = Column(String, default="linux/amd64", nullable=False) # 逗号分隔的平台列表
     credential_id = Column(String, ForeignKey("credentials.id"), nullable=True)
     proxy_id = Column(String, ForeignKey("proxies.id"), nullable=True)
     backup_ignore_patterns = Column(String, nullable=True, default="")
