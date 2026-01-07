@@ -12,6 +12,7 @@ class Project(Base):
     registry_url = Column(String, nullable=False)
     repo_image_name = Column(String, nullable=False)
     no_cache = Column(Boolean, default=False, nullable=False)
+    auto_cleanup = Column(Boolean, default=True, nullable=False)
     credential_id = Column(String, ForeignKey("credentials.id"), nullable=True)
     proxy_id = Column(String, ForeignKey("proxies.id"), nullable=True)
     backup_ignore_patterns = Column(String, nullable=True, default="")

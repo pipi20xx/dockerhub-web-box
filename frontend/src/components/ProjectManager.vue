@@ -31,7 +31,7 @@
       <el-table-column label="操作" width="700">
         <template #default="scope">
           <div class="actions-cell">
-            <el-input v-model="scope.row.tag" size="small" style="width: 80px;" />
+            <el-input v-model="scope.row.tag" size="small" style="width: 120px;" placeholder="Tag(s), 支持 | 或逗号" />
             <el-button size="small" type="success" @click="handleBuild(scope.row)">构建&推送</el-button>
             <el-button size="small" @click="openEditDialog(scope.row)">编辑</el-button>
             <el-button size="small" type="primary" plain @click="handleBackup(scope.row)">备份</el-button>
@@ -57,8 +57,8 @@
         <el-form-item label="Dockerfile路径" prop="dockerfile_path">
           <el-input v-model="currentProject.dockerfile_path" placeholder="相对于构建上下文的路径, 例如: Dockerfile" />
         </el-form-item>
-        <el-form-item label="本地镜像名" prop="local_image_name">
-          <el-input v-model="currentProject.local_image_name" placeholder="构建时在本地使用的名称 (无斜杠)" />
+        <el-form-item label="本地镜像名 (可选)" prop="local_image_name">
+          <el-input v-model="currentProject.local_image_name" placeholder="构建时在本地使用的名称 (留空则直推远程)" />
         </el-form-item>
         <el-form-item label="仓库地址" prop="registry_url">
           <el-input v-model="currentProject.registry_url" placeholder="例如: registry.cn-hangzhou.aliyuncs.com" />
@@ -90,6 +90,10 @@
         </el-form-item>
         <el-form-item label="无缓存构建">
           <el-switch v-model="currentProject.no_cache" />
+        </el-form-item>
+        <el-form-item label="构建后清理">
+          <el-switch v-model="currentProject.auto_cleanup" />
+          <span style="margin-left: 10px; font-size: 12px; color: #909399;">成功推送后自动删除本地镜像标签</span>
         </el-form-item>
       </el-form>
       <template #footer>
@@ -161,6 +165,7 @@ const initialProjectState = {
   registry_url: '',
   repo_image_name: '',
   no_cache: false,
+  auto_cleanup: true,
   credential_id: null,
   proxy_id: null,
 };
@@ -172,7 +177,7 @@ const rules = reactive({
   name: [{ required: true, message: '请输入项目名称', trigger: 'blur' }],
   build_context: [{ required: true, message: '请输入构建上下文的绝对路径', trigger: 'blur' }],
   dockerfile_path: [{ required: true, message: '请输入Dockerfile的相对路径', trigger: 'blur' }],
-  local_image_name: [{ required: true, message: '请输入本地镜像名', trigger: 'blur' }],
+  local_image_name: [{ required: false, message: '请输入本地镜像名', trigger: 'blur' }],
   registry_url: [{ required: true, message: '请输入仓库地址', trigger: 'blur' }],
   repo_image_name: [{ required: true, message: '请输入仓库镜像名', trigger: 'blur' }],
 });
@@ -261,11 +266,32 @@ const handleBuild = async (project) => {
 };
 
 const openCopyDialog = (project) => {
-    const tag = project.tag || 'latest';
-    const fullImageName = `${project.registry_url}/${project.repo_image_name}:${tag}`;
-    const buildCmd = `docker build -t ${fullImageName} -f ${project.dockerfile_path} ${project.build_context}`;
-    const pushCmd = `docker push ${fullImageName}`;
-    commandToCopy.value = `${buildCmd}\n${pushCmd}`;
+    const tagInput = project.tag || 'latest';
+    // 支持英文逗号、中文逗号、竖线分割
+    const tags = tagInput.split(/[,，|]/).map(t => t.trim()).filter(t => t);
+    const repoBase = `${project.registry_url}/${project.repo_image_name}`;
+    
+    let commands = [];
+    const primaryFullImage = `${repoBase}:${tags[0]}`;
+    
+    // 构建命令 (直接构建主标签)
+    commands.push(`# 1. 构建主标签\ndocker build -t ${primaryFullImage} -f ${project.dockerfile_path} ${project.build_context}`);
+    
+    // 额外标签命令
+    if (tags.length > 1) {
+        commands.push(`\n# 2. 打额外标签`);
+        for (let i = 1; i < tags.length; i++) {
+            commands.push(`docker tag ${primaryFullImage} ${repoBase}:${tags[i]}`);
+        }
+    }
+
+    // 推送命令
+    commands.push(`\n# 3. 推送所有标签`);
+    tags.forEach(t => {
+        commands.push(`docker push ${repoBase}:${t}`);
+    });
+
+    commandToCopy.value = commands.join('\n');
     commandCopyDialogVisible.value = true;
 };
 

@@ -29,3 +29,11 @@ def check_and_migrate_db():
             with engine.connect() as conn:
                 conn.execute(text("ALTER TABLE projects ADD COLUMN backup_ignore_patterns VARCHAR DEFAULT ''"))
                 conn.commit()
+        
+        if "auto_cleanup" not in columns:
+            print("Migrating database: Adding 'auto_cleanup' column to 'projects' table.")
+            with engine.connect() as conn:
+                # SQLite doesn't support BOOLEAN but handles it as INTEGER 0/1. 
+                # Using DEFAULT 1 (True) as we want it enabled by default.
+                conn.execute(text("ALTER TABLE projects ADD COLUMN auto_cleanup BOOLEAN DEFAULT 1 NOT NULL"))
+                conn.commit()

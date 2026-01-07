@@ -5,16 +5,19 @@ class ProjectBase(BaseModel):
     name: str
     build_context: str
     dockerfile_path: str
-    local_image_name: str
+    local_image_name: str | None = None
     registry_url: str
     repo_image_name: str
     no_cache: bool = False
+    auto_cleanup: bool = True
     credential_id: str | None = None
     proxy_id: str | None = None
     backup_ignore_patterns: str | None = ""
 
     @validator('local_image_name')
     def validate_local_image_name(cls, v):
+        if v is None or v == "":
+            return v
         pattern = r'^[a-z0-9]+(?:[._-][a-z0-9]+)*$'
         if not re.match(pattern, v):
             raise ValueError('本地镜像名格式不正确 (只能小写字母/数字/._-，且不含斜杠)。')
