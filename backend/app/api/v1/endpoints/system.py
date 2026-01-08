@@ -1,9 +1,15 @@
 import subprocess
 import json
-from fastapi import APIRouter, HTTPException
+import os
+from fastapi import APIRouter, HTTPException, Depends
 from fastapi.responses import StreamingResponse
+from sqlalchemy.orm import Session
 from typing import List, Dict
 import asyncio
+import re
+
+from ....database.database import get_db
+from ....database import crud
 
 router = APIRouter()
 
@@ -14,29 +20,28 @@ def run_command(cmd: List[str]) -> str:
     except subprocess.CalledProcessError as e:
         raise HTTPException(status_code=500, detail=f"命令执行失败: {e.stderr}")
 
+def clean_registry_url(url: str) -> str:
+    if not url: return ""
+    s = re.sub(r'^https?://', '', url)
+    s = s.split('/')[0]
+    return s.strip()
+
 @router.get("/status")
 def get_system_status():
-    """检测当前 Docker 环境对多架构的支持情况"""
     try:
         buildx_version = run_command(["docker", "buildx", "version"])
         builders_raw = run_command(["docker", "buildx", "ls", "--format", "json"])
-        
         builders = []
         for line in builders_raw.splitlines():
             if line.strip():
-                try:
-                    builders.append(json.loads(line))
+                try: builders.append(json.loads(line))
                 except: pass
-
-        has_multiarch_builder = any(b.get("Driver") != "docker" for b in builders)
-        
+        has_multiarch_builder = any(b.get("Name") == "web-pusher-builder" for b in builders)
         platforms = []
         for b in builders:
             for node in b.get("Nodes", []):
                 platforms.extend(node.get("Platforms", []))
-        
         platforms = sorted(list(set(platforms)))
-        
         return {
             "buildx_available": True,
             "buildx_version": buildx_version,
@@ -45,43 +50,66 @@ def get_system_status():
             "is_ready": has_multiarch_builder and "linux/arm64" in platforms
         }
     except Exception as e:
-        return {
-            "buildx_available": False,
-            "error": str(e),
-            "is_ready": False
-        }
+        return {"buildx_available": False, "error": str(e), "is_ready": False}
 
 @router.post("/initialize")
-async def initialize_env():
-    """流式返回初始化日志"""
+async def initialize_env(db: Session = Depends(get_db)):
     async def event_generator():
-        commands = [
-            ["docker", "run", "--privileged", "--rm", "tonistiigi/binfmt", "--install", "all"],
-            ["docker", "buildx", "create", "--name", "web-pusher-builder", "--driver", "docker-container", "--use"],
-            ["docker", "buildx", "inspect", "--bootstrap"]
+        yield "--- 🚀 开始初始化多架构构建环境 (终极协议修复方案) ---\n"
+        
+        projects = crud.get_projects(db)
+        credentials = crud.get_credentials(db)
+        registries = set()
+        for p in projects:
+            reg = clean_registry_url(p.registry_url)
+            if reg: registries.add(reg)
+        for c in credentials:
+            reg = clean_registry_url(c.registry_url)
+            if reg: registries.add(reg)
+            
+        yield f"需要放行的仓库: {list(registries)}\n"
+
+        config_path = "/tmp/buildkitd.toml"
+        # 使用最显式的 TOML 格式
+        config_content = "[worker.oci]\n  max-parallelism = 4\n\n"
+        for reg in registries:
+            config_content += f'[registry."{reg}"]\n'
+            config_content += '  http = true\n'
+            config_content += '  insecure = true\n\n'
+
+        with open(config_path, "w") as f:
+            f.write(config_content)
+        
+        yield "--- 注入 BuildKit 配置 ---\n"
+        yield config_content
+        yield "--------------------------\n"
+
+        yield "\n> [1/3] 检查模拟器状态...\n"
+        subprocess.run(["docker", "run", "--privileged", "--rm", "tonistiigi/binfmt", "--install", "all"])
+        yield "模拟器已就绪。\n"
+
+        yield "\n> [2/3] 彻底重建 Builder 并绑定配置...\n"
+        subprocess.run(["docker", "buildx", "rm", "-f", "web-pusher-builder"], capture_output=True)
+        
+        # 增加 --driver-opt network=host 提升兼容性
+        create_cmd = [
+            "docker", "buildx", "create", 
+            "--name", "web-pusher-builder", 
+            "--driver", "docker-container", 
+            "--driver-opt", "network=host",
+            "--config", config_path,
+            "--use"
         ]
+        subprocess.run(create_cmd, capture_output=True)
+        yield "Builder 重建完成。\n"
+
+        yield "\n> [3/3] 强制启动引擎 (Bootstrap)...\n"
+        process = subprocess.Popen(["docker", "buildx", "inspect", "--bootstrap"], stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        for line in process.stdout: 
+            yield line
+            await asyncio.sleep(0.01)
+        process.wait()
         
-        yield "--- 🚀 开始初始化多架构构建环境 ---\n"
-        
-        for cmd in commands:
-            yield f"\n> 执行命令: {' '.join(cmd)}\n"
-            try:
-                # 使用 Popen 实时捕获输出
-                process = subprocess.Popen(
-                    cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True
-                )
-                for line in process.stdout:
-                    yield line
-                    await asyncio.sleep(0.01) # 微小延迟确保流顺畅
-                process.wait()
-                
-                if process.returncode != 0 and cmd[0] == "docker" and "create" in cmd:
-                    # 如果是创建 builder 失败（可能已存在），尝试切换
-                    yield "⚠️ Builder 可能已存在，尝试切换...\n"
-                    subprocess.run(["docker", "buildx", "use", "web-pusher-builder"])
-            except Exception as e:
-                yield f"❌ 出错: {str(e)}\n"
-        
-        yield "\n--- ✅ 环境初始化流程执行完毕 ---\n"
+        yield "\n--- ✅ 初始化完毕。请再次尝试 ARM64 推送 ---\n"
 
     return StreamingResponse(event_generator(), media_type="text/plain")

@@ -2,6 +2,7 @@ import docker
 import subprocess
 import os
 import re
+import tempfile
 from ..core.config import LOG_DIR, TASK_LOG_SENTINEL
 from ..database.database import SessionLocal
 from ..database import crud
@@ -10,6 +11,8 @@ def decrypt(token: str) -> str:
     return token # Encryption removed
 
 def run_docker_task(task_id: str, project_data: dict, tag_input: str, cred_data: dict | None, proxy_data: dict | None):
+    temp_builder_name = None
+    temp_config_path = None
     log_file_path = LOG_DIR / f"{task_id}.log"
     
     def log(message: str):
@@ -31,15 +34,23 @@ def run_docker_task(task_id: str, project_data: dict, tag_input: str, cred_data:
         log(f"目标平台: {', '.join(platforms)}")
         
         client = docker.from_env()
-        repo_base = f"{p['registry_url']}/{p['repo_image_name']}"
+        # 彻底清洗仓库地址，去除协议头和多余斜杠，确保 buildx 解析正确
+        raw_reg = p['registry_url'].replace("https://", "").replace("http://", "").rstrip('/')
+        repo_base = f"{raw_reg}/{p['repo_image_name']}".replace("//", "/")
         
         # 1. 登录
         if cred_data:
-            log(f"--- 正在登录到 {cred_data['registry_url']} ---")
+            # 针对 Buildx 优化：如果是非安全仓库，去掉协议头
+            reg_url = cred_data['registry_url']
+            if use_buildx:
+                # 提取纯净地址
+                reg_url = re.sub(r'^https?://', '', reg_url).rstrip('/')
+            
+            log(f"--- 正在登录到 {reg_url} ---")
             pwd = decrypt(cred_data['encrypted_password'])
             # 同时执行 SDK 登录和命令行登录 (buildx 需要命令行登录状态)
             client.login(username=cred_data['username'], password=pwd, registry=cred_data['registry_url'])
-            login_cmd = ["docker", "login", cred_data['registry_url'], "-u", cred_data['username'], "--password-stdin"]
+            login_cmd = ["docker", "login", reg_url, "-u", cred_data['username'], "--password-stdin"]
             subprocess.run(login_cmd, input=pwd, text=True, capture_output=True, check=True)
             log("--- 登录成功 ---")
 
@@ -68,7 +79,7 @@ ENV HTTP_PROXY=$HTTP_PROXY
 ENV HTTPS_PROXY=$HTTPS_PROXY
 ENV http_proxy=$http_proxy
 ENV https_proxy=$https_proxy
-RUN if [ -d /etc/apt/apt.conf.d ]; then echo \"Acquire::http::Proxy \\"$HTTP_PROXY\\"\";" > /etc/apt/apt.conf.d/99proxy; fi
+RUN if [ -d /etc/apt/apt.conf.d ]; then echo "Acquire::http::Proxy \\"$HTTP_PROXY\\";" > /etc/apt/apt.conf.d/99proxy; fi
 """
                 new_content = ""
                 for line in content.splitlines():
@@ -85,8 +96,61 @@ RUN if [ -d /etc/apt/apt.conf.d ]; then echo \"Acquire::http::Proxy \\"$HTTP_PRO
         if use_buildx:
             # Buildx 模式：支持多架构同时构建并推送
             log("\n--- 开始 Buildx 多架构构建与推送 ---")
+            
+            # 自动配置临时 Builder 以信任非安全仓库
+            try:
+                # 尝试解析并信任目标仓库
+                raw_url = p['registry_url']
+                reg_host = raw_url.replace("https://", "").replace("http://", "").split('/')[0]
+                
+                # 仅针对非 Docker Hub 且需要特殊配置的仓库
+                if reg_host not in ["docker.io", "index.docker.io", "registry-1.docker.io"]:
+                    # 智能判断: 如果显式 http:// 开头，或者看起来像私有IP/带端口，则启用 http
+                    is_private_ip = any(reg_host.startswith(prefix) for prefix in ["192.168.", "10.", "172."])
+                    has_port = ":" in reg_host
+                    is_http = raw_url.startswith("http://") or is_private_ip or has_port
+                    
+                    temp_builder_name = f"builder-{task_id}"
+                    
+                    # 创建临时配置文件
+                    fd, temp_config_path = tempfile.mkstemp(suffix=".toml")
+                    config_content = f'[registry."{reg_host}"]\n  http = {str(is_http).lower()}\n  insecure = true\n'
+                    with os.fdopen(fd, 'w') as f:
+                        f.write(config_content)
+                    
+                    log(f"--- 🛠️ 自动配置临时环境 (信任: {reg_host}, HTTP: {is_http}) ---")
+                    # log(f"Config content:\n{config_content}")
+                    
+                    # 创建专用 Builder
+                    create_cmd = [
+                        "docker", "buildx", "create",
+                        "--name", temp_builder_name,
+                        "--driver", "docker-container",
+                        "--driver-opt", "network=host",
+                        "--config", temp_config_path,
+                        "--bootstrap"
+                    ]
+                    
+                    try:
+                        subprocess.run(create_cmd, check=True, capture_output=True, text=True)
+                    except subprocess.CalledProcessError as e:
+                        log(f"⚠️ 创建临时 Builder 失败 (Exit {e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
+                        raise e # Re-raise to trigger fallback handling in outer block
+                        
+                else:
+                    temp_builder_name = None
+                
+            except Exception as e:
+                # 如果不是 CalledProcessError，这里的 e 可能没有 stderr
+                if not isinstance(e, subprocess.CalledProcessError):
+                    log(f"⚠️ 临时环境配置异常: {e}")
+                temp_builder_name = None
+
+            builder_to_use = temp_builder_name if temp_builder_name else "web-pusher-builder"
+
             buildx_cmd = [
                 "docker", "buildx", "build",
+                "--builder", builder_to_use,
                 "--platform", ",".join(platforms),
                 "--file", os.path.join(p['build_context'], effective_dockerfile),
                 p['build_context'],
@@ -149,6 +213,15 @@ RUN if [ -d /etc/apt/apt.conf.d ]; then echo \"Acquire::http::Proxy \\"$HTTP_PRO
     except Exception as e:
         log(f"\n--- ❌ 发生严重错误 ---\n{e}")
     finally:
+        # 清理临时 Builder
+        if temp_builder_name and temp_builder_name != "web-pusher-builder":
+             try:
+                 subprocess.run(["docker", "buildx", "rm", "-f", temp_builder_name], capture_output=True)
+             except: pass
+        if temp_config_path and os.path.exists(temp_config_path):
+             try: os.remove(temp_config_path)
+             except: pass
+
         log(TASK_LOG_SENTINEL)
         db = SessionLocal()
         try:
