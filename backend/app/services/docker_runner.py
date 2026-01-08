@@ -204,15 +204,18 @@ RUN if [ -d /etc/apt/apt.conf.d ]; then echo "Acquire::http::Proxy \\"$HTTP_PROX
                 try: client.images.remove(f"{repo_base}:{tag}")
                 except: pass
         
-        # 清理临时 Dockerfile
-        try:
-            tmp_df = os.path.join(p['build_context'], p['dockerfile_path'] + ".tmp")
-            if os.path.exists(tmp_df): os.remove(tmp_df)
-        except: pass
-
     except Exception as e:
         log(f"\n--- ❌ 发生严重错误 ---\n{e}")
     finally:
+        # 清理临时 Dockerfile
+        try:
+            # 无论成功失败，只要产生了临时文件都尝试清理
+            tmp_df = os.path.join(p['build_context'], p['dockerfile_path'] + ".tmp")
+            if os.path.exists(tmp_df): 
+                os.remove(tmp_df)
+                # log("--- 🗑️ 已清理临时 Dockerfile ---")
+        except: pass
+
         # 清理临时 Builder
         if temp_builder_name and temp_builder_name != "web-pusher-builder":
              try:
