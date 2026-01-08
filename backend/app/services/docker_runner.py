@@ -10,8 +10,11 @@ from ..database import crud
 def decrypt(token: str) -> str:
     return token # Encryption removed
 
+import hashlib
+
 def run_docker_task(task_id: str, project_data: dict, tag_input: str, cred_data: dict | None, proxy_data: dict | None):
-    temp_builder_name = None
+    # temp_builder_name 不再代表临时的，而是代表针对特定仓库的专用 Builder
+    target_builder_name = None
     temp_config_path = None
     log_file_path = LOG_DIR / f"{task_id}.log"
     
@@ -25,12 +28,12 @@ def run_docker_task(task_id: str, project_data: dict, tag_input: str, cred_data:
     p = project_data
     # 平台列表处理
     platforms = p.get('platforms', 'linux/amd64').split(',')
-    # 如果选择了多个平台，或者强制指定了非本地平台，则必须使用 buildx
-    use_buildx = len(platforms) > 1 or "linux/arm64" in platforms 
+    # 统一使用 Buildx，不再区分标准模式
+    use_buildx = True 
 
     final_status = "FAILED"
     try:
-        log(f"✅ 任务进程已启动... (使用 {'Buildx' if use_buildx else '标准'} 模式)")
+        log(f"✅ 任务进程已启动... (统一使用 Buildx 模式)")
         log(f"目标平台: {', '.join(platforms)}")
         
         client = docker.from_env()
@@ -42,9 +45,8 @@ def run_docker_task(task_id: str, project_data: dict, tag_input: str, cred_data:
         if cred_data:
             # 针对 Buildx 优化：如果是非安全仓库，去掉协议头
             reg_url = cred_data['registry_url']
-            if use_buildx:
-                # 提取纯净地址
-                reg_url = re.sub(r'^https?://', '', reg_url).rstrip('/')
+            # 提取纯净地址
+            reg_url = re.sub(r'^https?://', '', reg_url).rstrip('/')
             
             log(f"--- 正在登录到 {reg_url} ---")
             pwd = decrypt(cred_data['encrypted_password'])
@@ -92,39 +94,51 @@ RUN if [ -d /etc/apt/apt.conf.d ]; then echo "Acquire::http::Proxy \\"$HTTP_PROX
             except Exception as e:
                 log(f"⚠️ 代理注入失败: {e}")
 
-        # 3. 执行构建
-        if use_buildx:
-            # Buildx 模式：支持多架构同时构建并推送
-            log("\n--- 开始 Buildx 多架构构建与推送 ---")
+        # 3. 执行构建 (统一 Buildx 流程)
+        log("\n--- 开始 Buildx 多架构构建与推送 ---")
+        
+        # 智能配置 Builder (支持持久化复用)
+        try:
+            # 尝试解析并信任目标仓库
+            raw_url = p['registry_url']
+            reg_host = raw_url.replace("https://", "").replace("http://", "").split('/')[0]
             
-            # 自动配置临时 Builder 以信任非安全仓库
-            try:
-                # 尝试解析并信任目标仓库
-                raw_url = p['registry_url']
-                reg_host = raw_url.replace("https://", "").replace("http://", "").split('/')[0]
+            # 仅针对非 Docker Hub 且需要特殊配置的仓库
+            if reg_host not in ["docker.io", "index.docker.io", "registry-1.docker.io"]:
+                # 智能判断: 如果显式 http:// 开头，或者看起来像私有IP/带端口，则启用 http
+                is_private_ip = any(reg_host.startswith(prefix) for prefix in ["192.168.", "10.", "172."])
+                has_port = ":" in reg_host
+                is_http = raw_url.startswith("http://") or is_private_ip or has_port
                 
-                # 仅针对非 Docker Hub 且需要特殊配置的仓库
-                if reg_host not in ["docker.io", "index.docker.io", "registry-1.docker.io"]:
-                    # 智能判断: 如果显式 http:// 开头，或者看起来像私有IP/带端口，则启用 http
-                    is_private_ip = any(reg_host.startswith(prefix) for prefix in ["192.168.", "10.", "172."])
-                    has_port = ":" in reg_host
-                    is_http = raw_url.startswith("http://") or is_private_ip or has_port
-                    
-                    temp_builder_name = f"builder-{task_id}"
-                    
-                    # 创建临时配置文件
+                # 生成唯一且稳定的 Builder 名称 (基于仓库地址)
+                # 例如: builder-private-192-168-50-12-6100-a1b2c3
+                host_hash = hashlib.md5(reg_host.encode()).hexdigest()[:6]
+                safe_host_name = re.sub(r'[^a-zA-Z0-9]', '-', reg_host)
+                target_builder_name = f"builder-priv-{safe_host_name}-{host_hash}"
+
+                # 检查该 Builder 是否已存在
+                check_cmd = ["docker", "buildx", "inspect", target_builder_name]
+                builder_exists = subprocess.run(check_cmd, capture_output=True).returncode == 0
+                
+                if builder_exists:
+                    log(f"--- ♻️ 复用已有专用构建环境: {target_builder_name} ---")
+                else:
+                    # 不存在则创建
+                    # 创建临时配置文件 (修复 TOML 格式)
                     fd, temp_config_path = tempfile.mkstemp(suffix=".toml")
-                    config_content = f'[registry."{reg_host}"]\n  http = {str(is_http).lower()}\n  insecure = true\n'
+                    # 使用三引号确保换行符正确，避免转义问题
+                    config_content = f"""[registry."{reg_host}"]
+  http = {str(is_http).lower()}
+  insecure = true
+"""
                     with os.fdopen(fd, 'w') as f:
                         f.write(config_content)
                     
-                    log(f"--- 🛠️ 自动配置临时环境 (信任: {reg_host}, HTTP: {is_http}) ---")
-                    # log(f"Config content:\n{config_content}")
+                    log(f"--- 🛠️ 初始化专用构建环境 (信任: {reg_host}, HTTP: {is_http}) ---")
                     
-                    # 创建专用 Builder
                     create_cmd = [
                         "docker", "buildx", "create",
-                        "--name", temp_builder_name,
+                        "--name", target_builder_name,
                         "--driver", "docker-container",
                         "--driver-opt", "network=host",
                         "--config", temp_config_path,
@@ -133,66 +147,64 @@ RUN if [ -d /etc/apt/apt.conf.d ]; then echo "Acquire::http::Proxy \\"$HTTP_PROX
                     
                     try:
                         subprocess.run(create_cmd, check=True, capture_output=True, text=True)
+                        log(f"--- ✅ 专用环境创建成功: {target_builder_name} ---")
                     except subprocess.CalledProcessError as e:
-                        log(f"⚠️ 创建临时 Builder 失败 (Exit {e.returncode}):\nSTDOUT: {e.stdout}\nSTDERR: {e.stderr}")
-                        raise e # Re-raise to trigger fallback handling in outer block
-                        
-                else:
-                    temp_builder_name = None
-                
-            except Exception as e:
-                # 如果不是 CalledProcessError，这里的 e 可能没有 stderr
-                if not isinstance(e, subprocess.CalledProcessError):
-                    log(f"⚠️ 临时环境配置异常: {e}")
-                temp_builder_name = None
-
-            builder_to_use = temp_builder_name if temp_builder_name else "web-pusher-builder"
-
-            buildx_cmd = [
-                "docker", "buildx", "build",
-                "--builder", builder_to_use,
-                "--platform", ",".join(platforms),
-                "--file", os.path.join(p['build_context'], effective_dockerfile),
-                p['build_context'],
-                "--push"
-            ]
-            # 添加所有 Tag
-            for tag in tags:
-                buildx_cmd.extend(["-t", f"{repo_base}:{tag}"])
-            # 添加 Build Args
-            for k, v in build_args.items():
-                buildx_cmd.extend(["--build-arg", f"{k}={v}"])
-            if p.get('no_cache'):
-                buildx_cmd.append("--no-cache")
-
-            # 执行并实时抓取日志
-            process = subprocess.Popen(buildx_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=os.environ)
-            for line in process.stdout:
-                log(line)
-            process.wait()
-            if process.returncode != 0:
-                raise Exception(f"Buildx 构建失败，退出码: {process.returncode}")
-        else:
-            # 标准模式
-            primary_full_image = f"{repo_base}:{tags[0]}"
-            log(f"\n--- 开始标准构建: {primary_full_image} ---")
-            streamer = client.api.build(
-                path=p['build_context'], dockerfile=effective_dockerfile, 
-                tag=primary_full_image, nocache=p.get('no_cache', False), 
-                rm=True, decode=True, buildargs=build_args
-            )
-            for chunk in streamer:
-                if 'stream' in chunk: log(chunk['stream'])
+                        log(f"⚠️ 创建专用 Builder 失败 (Exit {e.returncode}):\\nSTDOUT: {e.stdout}\\nSTDERR: {e.stderr}")
+                        raise Exception(f"无法创建支持 HTTP/Insecure 的构建环境: {e.stderr}")
+                    
+            else:
+                target_builder_name = None
             
-            image = client.images.get(primary_full_image)
-            # 打其余标签并推送
-            for i, tag in enumerate(tags):
-                full_name = f"{repo_base}:{tag}"
-                if i > 0: image.tag(repository=repo_base, tag=tag)
-                log(f"--- 正在推送: {full_name} ---")
-                for chunk in client.images.push(repository=repo_base, tag=tag, stream=True, decode=True):
-                    if 'error' in chunk: raise Exception(chunk['error'])
-                    if 'status' in chunk: log(f"{chunk['status']} {chunk.get('progress', '')}")
+        except Exception as e:
+            # 如果是上面抛出的异常，直接中断任务
+            log(f"⚠️ 环境配置严重错误: {e}")
+            raise e
+
+        builder_to_use = target_builder_name if target_builder_name else "web-pusher-builder"
+        
+        # 构造完整的镜像标签引用，用于缓存源
+        # 使用列表中的第一个 tag 作为主要的缓存来源
+        primary_tag = tags[0]
+        cache_from_image = f"{repo_base}:{primary_tag}"
+
+        buildx_cmd = [
+            "docker", "buildx", "build",
+            "--builder", builder_to_use,
+            "--platform", ",".join(platforms),
+            "--file", os.path.join(p['build_context'], effective_dockerfile),
+            p['build_context'],
+            "--push"
+        ]
+        
+        # --- 缓存策略优化 ---
+        # 默认启用 Inline Cache (将缓存元数据写入镜像)
+        buildx_cmd.append("--cache-to=type=inline")
+        
+        if p.get('no_cache'):
+            # 用户强制要求无缓存构建：添加 --no-cache，且不读取旧缓存
+            buildx_cmd.append("--no-cache")
+            log("--- ⚡ 强制无缓存构建 (已禁用读取旧缓存) ---")
+        else:
+            # 普通构建：尝试利用远程 Registry 中的缓存
+            # 注意：如果这是第一次推送，或者是私有非安全仓库，这里可能会有 warning，但不影响构建
+            buildx_cmd.append(f"--cache-from=type=registry,ref={cache_from_image}")
+            log(f"--- ♻️ 尝试复用远程缓存: {cache_from_image} ---")
+        # --------------------
+
+        # 添加所有 Tag
+        for tag in tags:
+            buildx_cmd.extend(["-t", f"{repo_base}:{tag}"])
+        # 添加 Build Args
+        for k, v in build_args.items():
+            buildx_cmd.extend(["--build-arg", f"{k}={v}"])
+
+        # 执行并实时抓取日志
+        process = subprocess.Popen(buildx_cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, env=os.environ)
+        for line in process.stdout:
+            log(line)
+        process.wait()
+        if process.returncode != 0:
+            raise Exception(f"Buildx 构建失败，退出码: {process.returncode}")
 
         final_status = "SUCCESS"
         log("\n--- ✅ 任务成功完成! ---")
@@ -216,11 +228,8 @@ RUN if [ -d /etc/apt/apt.conf.d ]; then echo "Acquire::http::Proxy \\"$HTTP_PROX
                 # log("--- 🗑️ 已清理临时 Dockerfile ---")
         except: pass
 
-        # 清理临时 Builder
-        if temp_builder_name and temp_builder_name != "web-pusher-builder":
-             try:
-                 subprocess.run(["docker", "buildx", "rm", "-f", temp_builder_name], capture_output=True)
-             except: pass
+        # 注意：不再清理 target_builder_name，实现持久化复用
+        # 仅清理配置文件（因为它已经被 buildx 加载到内部容器了，本地文件可以删）
         if temp_config_path and os.path.exists(temp_config_path):
              try: os.remove(temp_config_path)
              except: pass
