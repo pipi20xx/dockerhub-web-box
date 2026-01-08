@@ -47,7 +47,7 @@
       <el-table-column prop="name" label="项目名称" width="200" />
       <el-table-column prop="repo_image_name" label="目标镜像">
           <template #default="scope">
-              {{ scope.row.registry_url }}/{{ scope.row.repo_image_name }}
+              <span class="text-secondary">{{ getRegistryUrl(scope.row.registry_id) }}/</span>{{ scope.row.repo_image_name }}
           </template>
       </el-table-column>
       <el-table-column prop="build_context" label="构建路径" width="300" />
@@ -84,22 +84,19 @@
         <el-form-item label="本地镜像名 (可选)" prop="local_image_name">
           <el-input v-model="currentProject.local_image_name" placeholder="构建时在本地使用的名称 (留空则直推远程)" />
         </el-form-item>
-        <el-form-item label="仓库地址" prop="registry_url">
-          <el-input v-model="currentProject.registry_url" placeholder="例如: registry.cn-hangzhou.aliyuncs.com" />
+        <el-form-item label="目标仓库" prop="registry_id">
+          <el-select v-model="currentProject.registry_id" placeholder="请选择已配置的仓库" style="width: 100%;">
+            <el-option
+              v-for="reg in registryStore.registries"
+              :key="reg.id"
+              :label="`${reg.name} (${reg.url})`"
+              :value="reg.id"
+            />
+          </el-select>
+          <div style="font-size: 12px; color: #909399;">仓库管理中可预设地址和认证信息</div>
         </el-form-item>
         <el-form-item label="仓库镜像名" prop="repo_image_name">
           <el-input v-model="currentProject.repo_image_name" placeholder="例如: my-namespace/my-app" />
-        </el-form-item>
-        <el-form-item label="使用凭证">
-            <el-select v-model="currentProject.credential_id" placeholder="选择凭证" clearable style="width: 100%;">
-              <el-option label="无" :value="null" />
-              <el-option
-                v-for="cred in credentialStore.credentials"
-                :key="cred.id"
-                :label="`${cred.name} (${cred.username})`"
-                :value="cred.id"
-              />
-            </el-select>
         </el-form-item>
         <el-form-item label="使用代理">
             <el-select v-model="currentProject.proxy_id" placeholder="选择代理" clearable style="width: 100%;">
@@ -174,6 +171,7 @@
 <script setup>
 import { ref, reactive, onMounted, nextTick } from 'vue';
 import { useProjectStore } from '@/stores/projectStore';
+import { useRegistryStore } from '@/stores/registryStore';
 import { useCredentialStore } from '@/stores/credentialStore';
 import { useProxyStore } from '@/stores/proxyStore';
 import { useTaskStore } from '@/stores/taskStore';
@@ -187,6 +185,7 @@ import BackupOptionsDialog from './BackupOptionsDialog.vue';
 import { useSimulatedProgress } from '@/composables/useSimulatedProgress';
 
 const projectStore = useProjectStore();
+const registryStore = useRegistryStore();
 const credentialStore = useCredentialStore();
 const proxyStore = useProxyStore();
 const taskStore = useTaskStore();
@@ -270,13 +269,12 @@ const initialProjectState = {
   build_context: '',
   dockerfile_path: 'Dockerfile',
   local_image_name: '',
-  registry_url: '',
+  registry_id: null,
   repo_image_name: '',
   no_cache: false,
   auto_cleanup: true,
   platforms: 'linux/amd64',
   platforms_array: ['linux/amd64'],
-  credential_id: null,
   proxy_id: null,
 };
 const currentProject = ref({ ...initialProjectState });
@@ -288,16 +286,22 @@ const rules = reactive({
   build_context: [{ required: true, message: '请输入构建上下文的绝对路径', trigger: 'blur' }],
   dockerfile_path: [{ required: true, message: '请输入Dockerfile的相对路径', trigger: 'blur' }],
   local_image_name: [{ required: false, message: '请输入本地镜像名', trigger: 'blur' }],
-  registry_url: [{ required: true, message: '请输入仓库地址', trigger: 'blur' }],
+  registry_id: [{ required: true, message: '请选择目标仓库', trigger: 'change' }],
   repo_image_name: [{ required: true, message: '请输入仓库镜像名', trigger: 'blur' }],
 });
 
 onMounted(() => {
   projectStore.fetchProjects();
+  registryStore.fetchRegistries();
   credentialStore.fetchCredentials();
   proxyStore.fetchProxies();
   checkSystemStatus();
 });
+
+const getRegistryUrl = (id) => {
+    const reg = registryStore.registries.find(r => r.id === id);
+    return reg ? reg.url : '未配置';
+};
 
 const resetForm = () => {
     currentProject.value = { ...initialProjectState };
@@ -383,7 +387,8 @@ const openCopyDialog = (project) => {
     const tagInput = project.tag || 'latest';
     // 支持英文逗号、中文逗号、竖线分割
     const tags = tagInput.split(/[,，|]/).map(t => t.trim()).filter(t => t);
-    const repoBase = `${project.registry_url}/${project.repo_image_name}`;
+    const regUrl = getRegistryUrl(project.registry_id);
+    const repoBase = `${regUrl}/${project.repo_image_name}`;
     
     let commands = [];
     const primaryFullImage = `${repoBase}:${tags[0]}`;

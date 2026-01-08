@@ -1,8 +1,9 @@
 from fastapi import APIRouter
-from .endpoints import projects, credentials, proxies, tasks, backups, system
+from .endpoints import projects, credentials, proxies, tasks, backups, system, registries
 
 api_router = APIRouter()
 api_router.include_router(projects.router, prefix="/projects", tags=["Projects"])
+api_router.include_router(registries.router, prefix="/registries", tags=["Registries"])
 api_router.include_router(credentials.router, prefix="/credentials", tags=["Credentials"])
 api_router.include_router(proxies.router, prefix="/proxies", tags=["Proxies"])
 api_router.include_router(tasks.router, prefix="/tasks", tags=["Tasks"])

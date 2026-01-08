@@ -57,23 +57,24 @@ async def initialize_env(db: Session = Depends(get_db)):
     async def event_generator():
         yield "--- 🚀 开始初始化多架构构建环境 (终极协议修复方案) ---\n"
         
-        projects = crud.get_projects(db)
-        credentials = crud.get_credentials(db)
-        registries = set()
-        for p in projects:
-            reg = clean_registry_url(p.registry_url)
-            if reg: registries.add(reg)
-        for c in credentials:
-            reg = clean_registry_url(c.registry_url)
-            if reg: registries.add(reg)
+        # 从新的 Registry 模型中获取所有仓库
+        all_registries = crud.get_registries(db)
+        insecure_registries = set()
+        
+        for reg in all_registries:
+            clean_host = clean_registry_url(reg.url)
+            # 如果仓库被标记为非 HTTPS，或者不是 Docker Hub，我们将其加入信任列表
+            if not reg.is_https or clean_host not in ["docker.io", "index.docker.io", "registry-1.docker.io"]:
+                if clean_host:
+                    insecure_registries.add(clean_host)
             
-        yield f"需要放行的仓库: {list(registries)}\n"
+        yield f"需要特殊配置的仓库: {list(insecure_registries)}\n"
 
         config_path = "/tmp/buildkitd.toml"
         # 使用最显式的 TOML 格式
         config_content = "[worker.oci]\n  max-parallelism = 4\n\n"
-        for reg in registries:
-            config_content += f'[registry."{reg}"]\n'
+        for host in insecure_registries:
+            config_content += f'[registry."{host}"]\n'
             config_content += '  http = true\n'
             config_content += '  insecure = true\n\n'
 

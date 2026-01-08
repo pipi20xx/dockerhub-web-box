@@ -20,9 +20,12 @@ def execute_task_endpoint(project_id: str, tag: str, db: Session = Depends(get_d
     if not project:
         raise HTTPException(status_code=404, detail="项目未找到")
 
-    cred, proxy = None, None
-    if project.credential_id:
-        cred = crud.get_credential(db, project.credential_id)
+    registry, cred, proxy = None, None, None
+    if project.registry_id:
+        registry = crud.get_registry(db, project.registry_id)
+        if registry and registry.credential_id:
+            cred = crud.get_credential(db, registry.credential_id)
+    
     if project.proxy_id:
         proxy = crud.get_proxy(db, project.proxy_id)
 
@@ -32,7 +35,21 @@ def execute_task_endpoint(project_id: str, tag: str, db: Session = Depends(get_d
     crud.create_task_log(db=db, project_id=project_id, task_id=task_id, tag=tag)
     
     project_dict = {c.name: getattr(project, c.name) for c in project.__table__.columns}
+    # 构造带协议头的完整 URL
+    if registry:
+        protocol = "https" if registry.is_https else "http"
+        # 清洗可能存在的重复协议头
+        clean_url = registry.url.replace("https://", "").replace("http://", "")
+        full_reg_url = f"{protocol}://{clean_url}"
+    else:
+        full_reg_url = "https://docker.io"
+
+    project_dict['registry_url'] = full_reg_url
+    
     cred_dict = {c.name: getattr(cred, c.name) for c in cred.__table__.columns} if cred else None
+    if cred_dict:
+        cred_dict['registry_url'] = full_reg_url
+
     proxy_dict = {c.name: getattr(proxy, c.name) for c in proxy.__table__.columns} if proxy else None
     
     process = multiprocessing.Process(

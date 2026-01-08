@@ -9,7 +9,6 @@
       <el-table-column prop="name" label="名称" />
       <el-table-column prop="username" label="用户名" />
       <el-table-column prop="password" label="密码" />
-      <el-table-column prop="registry_url" label="仓库地址" />
       <el-table-column label="操作" width="150">
         <template #default="scope">
           <el-button size="small" @click="openEditDialog(scope.row)">编辑</el-button>
@@ -22,9 +21,6 @@
       <el-form ref="formRef" :model="form" :rules="rules" label-width="100px">
         <el-form-item label="凭证名称" prop="name">
           <el-input v-model="form.name" placeholder="例如: dockerhub-main" />
-        </el-form-item>
-        <el-form-item label="仓库地址" prop="registry_url">
-          <el-input v-model="form.registry_url" placeholder="例如: registry.hub.docker.com" />
         </el-form-item>
         <el-form-item label="用户名" prop="username">
           <el-input v-model="form.username" />
@@ -57,14 +53,12 @@ const formRef = ref(null);
 
 const form = reactive({
   name: '',
-  registry_url: '',
   username: '',
   password: '',
 });
 
 const rules = reactive({
   name: [{ required: true, message: '请输入名称', trigger: 'blur' }],
-  registry_url: [{ required: true, message: '请输入仓库地址', trigger: 'blur' }],
   username: [{ required: true, message: '请输入用户名', trigger: 'blur' }],
   password: [{ required: true, message: '请输入密码', trigger: 'blur' }], // Only required on create, handled in submit
 });
@@ -75,7 +69,6 @@ onMounted(() => {
 
 const resetForm = () => {
   form.name = '';
-  form.registry_url = '';
   form.username = '';
   form.password = '';
   isEditing.value = false;
@@ -96,7 +89,6 @@ const openEditDialog = (row) => {
     editingId.value = row.id;
     
     form.name = row.name;
-    form.registry_url = row.registry_url;
     form.username = row.username;
     form.password = row.password; // Populate password
     

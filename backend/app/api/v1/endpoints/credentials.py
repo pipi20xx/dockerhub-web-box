@@ -17,9 +17,8 @@ def read_credentials(db: Session = Depends(get_db)):
         result.append({
             "id": cred.id,
             "name": cred.name,
-            "registry_url": cred.registry_url,
             "username": cred.username,
-            "password": cred.encrypted_password  # Now stores plain text
+            "password": cred.encrypted_password
         })
     return result
 
@@ -28,12 +27,7 @@ def create_credential(cred: schema.CredentialCreate, db: Session = Depends(get_d
     if crud.get_credential_by_name(db, name=cred.name):
         raise HTTPException(status_code=400, detail="凭证名称已存在")
     
-    try:
-        client = docker.from_env()
-        client.login(username=cred.username, password=cred.password, registry=cred.registry_url)
-    except Exception as e:
-        raise HTTPException(status_code=401, detail=f"凭证验证失败: {e}")
-        
+    # 凭证本身不再进行 Docker Login 验证，因为没有 registry 关联
     return crud.create_credential(db=db, cred=cred)
 
 @router.put("/{cred_id}", response_model=schema.Credential)
@@ -45,22 +39,6 @@ def update_credential(cred_id: str, cred_in: schema.CredentialUpdate, db: Sessio
     if cred_in.name and cred_in.name != db_cred.name:
          if crud.get_credential_by_name(db, name=cred_in.name):
              raise HTTPException(status_code=400, detail="Credential name already exists")
-
-    # If password or registry info changes, we should probably re-verify login
-    if cred_in.password or cred_in.username or cred_in.registry_url:
-        username = cred_in.username or db_cred.username
-        password = cred_in.password # If None, we can't verify unless we decrypt existing, which we can do
-        registry = cred_in.registry_url or db_cred.registry_url
-        
-        # If password is provided, verify. If not, and only user/registry changed, 
-        # we strictly should verify but we don't have the raw password easily available (it's encrypted).
-        # For simplicity/security, only verify if password is being updated.
-        if cred_in.password:
-            try:
-                client = docker.from_env()
-                client.login(username=username, password=password, registry=registry)
-            except Exception as e:
-                raise HTTPException(status_code=401, detail=f"Credential validation failed: {e}")
 
     return crud.update_credential(db=db, db_cred=db_cred, cred_in=cred_in)
 

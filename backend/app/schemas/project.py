@@ -6,12 +6,11 @@ class ProjectBase(BaseModel):
     build_context: str
     dockerfile_path: str
     local_image_name: str | None = None
-    registry_url: str
     repo_image_name: str
     no_cache: bool = False
     auto_cleanup: bool = True
     platforms: str = "linux/amd64"
-    credential_id: str | None = None
+    registry_id: str | None = None
     proxy_id: str | None = None
     backup_ignore_patterns: str | None = ""
 

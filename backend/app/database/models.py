@@ -9,20 +9,26 @@ class Project(Base):
     build_context = Column(String, nullable=False)
     dockerfile_path = Column(String, nullable=False)
     local_image_name = Column(String, nullable=False)
-    registry_url = Column(String, nullable=False)
     repo_image_name = Column(String, nullable=False)
     no_cache = Column(Boolean, default=False, nullable=False)
     auto_cleanup = Column(Boolean, default=True, nullable=False)
-    platforms = Column(String, default="linux/amd64", nullable=False) # 逗号分隔的平台列表
-    credential_id = Column(String, ForeignKey("credentials.id"), nullable=True)
+    platforms = Column(String, default="linux/amd64", nullable=False)
+    registry_id = Column(String, ForeignKey("registries.id"), nullable=True)
     proxy_id = Column(String, ForeignKey("proxies.id"), nullable=True)
     backup_ignore_patterns = Column(String, nullable=True, default="")
+
+class Registry(Base):
+    __tablename__ = "registries"
+    id = Column(String, primary_key=True, index=True)
+    name = Column(String, unique=True, index=True, nullable=False)
+    url = Column(String, nullable=False)
+    is_https = Column(Boolean, default=True, nullable=False)
+    credential_id = Column(String, ForeignKey("credentials.id"), nullable=True)
 
 class Credential(Base):
     __tablename__ = "credentials"
     id = Column(String, primary_key=True, index=True)
     name = Column(String, unique=True, index=True, nullable=False)
-    registry_url = Column(String, nullable=False)
     username = Column(String, nullable=False)
     encrypted_password = Column(String, nullable=False)
 

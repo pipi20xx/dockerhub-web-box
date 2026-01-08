@@ -3,8 +3,9 @@ import os # ✨ 新增：导入os模块以操作文件
 from pathlib import Path # ✨ 新增：导入Path模块
 from sqlalchemy.orm import Session
 from . import models
-from ..schemas import project as project_schema, credential as cred_schema, proxy as proxy_schema
-from ..core.config import LOG_DIR # ✨ 新增：从config导入LOG_DIR
+from ..schemas import project as project_schema, credential as cred_schema, proxy as proxy_schema, registry as registry_schema
+from ..core.config import LOG_DIR
+ # ✨ 新增：从config导入LOG_DIR
 
 def encrypt(data: str) -> str: return data
 def decrypt(token: str) -> str: return token
@@ -37,6 +38,37 @@ def delete_project(db: Session, db_project: models.Project):
     db.commit()
     return db_project
 
+# --- Registry CRUD ---
+def get_registry(db: Session, registry_id: str):
+    return db.query(models.Registry).filter(models.Registry.id == registry_id).first()
+
+def get_registry_by_name(db: Session, name: str):
+    return db.query(models.Registry).filter(models.Registry.name == name).first()
+
+def get_registries(db: Session):
+    return db.query(models.Registry).order_by(models.Registry.name).all()
+
+def create_registry(db: Session, registry: registry_schema.RegistryCreate):
+    db_registry = models.Registry(id=str(uuid.uuid4()), **registry.dict())
+    db.add(db_registry)
+    db.commit()
+    db.refresh(db_registry)
+    return db_registry
+
+def update_registry(db: Session, db_registry: models.Registry, registry_in: registry_schema.RegistryCreate):
+    update_data = registry_in.dict(exclude_unset=True)
+    for key, value in update_data.items():
+        setattr(db_registry, key, value)
+    db.add(db_registry)
+    db.commit()
+    db.refresh(db_registry)
+    return db_registry
+
+def delete_registry(db: Session, db_registry: models.Registry):
+    db.delete(db_registry)
+    db.commit()
+    return db_registry
+
 # --- Credential CRUD ---
 def get_credential(db: Session, cred_id: str):
     return db.query(models.Credential).filter(models.Credential.id == cred_id).first()
@@ -49,7 +81,7 @@ def get_credentials(db: Session):
 
 def create_credential(db: Session, cred: cred_schema.CredentialCreate):
     encrypted_password = encrypt(cred.password)
-    db_cred = models.Credential(id=str(uuid.uuid4()), name=cred.name, registry_url=cred.registry_url, username=cred.username, encrypted_password=encrypted_password)
+    db_cred = models.Credential(id=str(uuid.uuid4()), name=cred.name, username=cred.username, encrypted_password=encrypted_password)
     db.add(db_cred)
     db.commit()
     db.refresh(db_cred)

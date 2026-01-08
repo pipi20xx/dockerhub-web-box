@@ -14,6 +14,9 @@
           <el-tab-pane label="项目管理" name="projects">
             <ProjectManager @switch-tab="switchToTab" />
           </el-tab-pane>
+          <el-tab-pane label="仓库管理" name="registries">
+            <RegistryManager />
+          </el-tab-pane>
           <el-tab-pane label="凭证管理" name="credentials">
             <CredentialManager />
           </el-tab-pane>
@@ -32,6 +35,7 @@
 <script setup>
 import { ref } from 'vue'
 import ProjectManager from '@/components/ProjectManager.vue'
+import RegistryManager from '@/components/RegistryManager.vue'
 import CredentialManager from '@/components/CredentialManager.vue'
 import ProxyManager from '@/components/ProxyManager.vue'
 import LogViewer from '@/components/LogViewer.vue'

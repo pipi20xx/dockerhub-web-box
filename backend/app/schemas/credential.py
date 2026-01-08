@@ -2,7 +2,6 @@ from pydantic import BaseModel, Field
 
 class CredentialBase(BaseModel):
     name: str
-    registry_url: str
     username: str
 
 class CredentialCreate(CredentialBase):
@@ -10,7 +9,6 @@ class CredentialCreate(CredentialBase):
 
 class CredentialUpdate(BaseModel):
     name: str | None = None
-    registry_url: str | None = None
     username: str | None = None
     password: str | None = None
 
